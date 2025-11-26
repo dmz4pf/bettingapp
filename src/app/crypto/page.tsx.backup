@@ -23,8 +23,6 @@ import { ConnectButton } from '@rainbow-me/rainbowkit';
 import { TokenChart } from '@/components/crypto/TokenChart';
 import { formatEth, formatDate } from '@/lib/utils';
 import { searchBaseTokens, POPULAR_BASE_TOKENS, type SearchResult } from '@/lib/dexscreener';
-import { usePoints } from '@/hooks/usePoints';
-import { calculatePoints } from '@/lib/points';
 
 // Token Details Modal
 function TokenDetailsModal({
@@ -136,9 +134,7 @@ function QuickBetCard({ token, onViewDetails }: { token: typeof FEATURED_TOKENS[
   const { isConnected } = useAccount();
   const [betAmount, setBetAmount] = useState('0.01');
   const [selectedDirection, setSelectedDirection] = useState<'up' | 'down' | null>(null);
-  const [selectedTimeframe, setSelectedTimeframe] = useState<'15s' | '30s' | '1m' | '5m' | '15m' | '1h' | '4h' | '24h' | 'custom'>('1h');
-  const [customTime, setCustomTime] = useState('1');
-  const [customTimeUnit, setCustomTimeUnit] = useState<'s' | 'm' | 'h'>('m');
+  const [selectedTimeframe, setSelectedTimeframe] = useState<'1h' | '4h' | '24h' | '7d'>('1h');
   const [showBetConfig, setShowBetConfig] = useState(false);
   const { data: currentPrice } = useCurrentPrice(token.symbol);
   const { createPrediction, isPending: isCreatingPrediction, isSuccess: isCreateSuccess } = useCreatePrediction();
@@ -161,20 +157,20 @@ function QuickBetCard({ token, onViewDetails }: { token: typeof FEATURED_TOKENS[
         case 's': return time;
         case 'm': return time * 60;
         case 'h': return time * 3600;
-        default: return 60;
+        default: return time * 60;
       }
     }
 
     switch (selectedTimeframe) {
-      case '15s': return 15;
-      case '30s': return 30;
-      case '1m': return 60;
-      case '5m': return 300;
-      case '15m': return 900;
-      case '1h': return 3600;
-      case '4h': return 14400;
-      case '24h': return 86400;
-      default: return 3600;
+      case '15s': return 15;      // 15 seconds
+      case '30s': return 30;      // 30 seconds
+      case '1m': return 60;       // 1 minute
+      case '5m': return 300;      // 5 minutes
+      case '15m': return 900;     // 15 minutes
+      case '1h': return 3600;     // 1 hour
+      case '4h': return 14400;    // 4 hours
+      case '24h': return 86400;   // 24 hours
+      default: return 15;
     }
   };
 
@@ -467,20 +463,20 @@ function CustomTokenSearch({ onViewDetails }: { onViewDetails: (token: { symbol:
         case 's': return time;
         case 'm': return time * 60;
         case 'h': return time * 3600;
-        default: return 60;
+        default: return time * 60;
       }
     }
 
     switch (selectedTimeframe) {
-      case '15s': return 15;
-      case '30s': return 30;
-      case '1m': return 60;
-      case '5m': return 300;
-      case '15m': return 900;
-      case '1h': return 3600;
-      case '4h': return 14400;
-      case '24h': return 86400;
-      default: return 3600;
+      case '15s': return 15;      // 15 seconds
+      case '30s': return 30;      // 30 seconds
+      case '1m': return 60;       // 1 minute
+      case '5m': return 300;      // 5 minutes
+      case '15m': return 900;     // 15 minutes
+      case '1h': return 3600;     // 1 hour
+      case '4h': return 14400;    // 4 hours
+      case '24h': return 86400;   // 24 hours
+      default: return 15;
     }
   };
 
@@ -832,17 +828,15 @@ function HistoryPredictionCard({ predictionId }: { predictionId: number }) {
   const { data: prediction } = usePrediction(predictionId);
   const { data: userBets, refetch: refetchBets } = useUserPredictionBets(predictionId, address);
   const { claimPredictionWinnings, isPending, isConfirming, isSuccess } = useClaimPredictionWinnings();
-  const { addBetPoints } = usePoints();
 
   // Extract data
-  // Contract returns: id, tokenSymbol, priceFeed, timeframe, startPrice, endPrice, totalUpBets, totalDownBets, totalUpBetsEth, totalDownBetsEth, resolved, priceWentUp, startTime, endTime
-  let id: any, tokenSymbol: any, priceFeed: any, timeframe: any, startPrice: any, endPrice: any, totalUpBets: any, totalDownBets: any, totalUpBetsEth: any, totalDownBetsEth: any, resolved: any, winningOutcome: any, startTime: any, endTime: any;
+  let id, tokenSymbol, description, startPrice, endPrice, totalYesPool, totalNoPool, resolved, winningOutcome, actualEndPrice, creator, startTime, endTime;
 
   if (prediction) {
     if (Array.isArray(prediction)) {
-      [id, tokenSymbol, priceFeed, timeframe, startPrice, endPrice, totalUpBets, totalDownBets, totalUpBetsEth, totalDownBetsEth, resolved, winningOutcome, startTime, endTime] = prediction;
+      [id, tokenSymbol, , , startPrice, endPrice, totalYesPool, totalNoPool, resolved, winningOutcome, startTime, endTime] = prediction;
     } else {
-      ({ id, tokenSymbol, priceFeed, timeframe, startPrice, endPrice, totalUpBets, totalDownBets, totalUpBetsEth, totalDownBetsEth, resolved, winningOutcome, startTime, endTime } = prediction as any);
+      ({ id, tokenSymbol, startPrice, endPrice, totalYesPool, totalNoPool, resolved, winningOutcome, startTime, endTime } = prediction as any);
     }
   }
 
@@ -879,54 +873,9 @@ function HistoryPredictionCard({ predictionId }: { predictionId: number }) {
     }
   }, [isSuccess, refetchBets]);
 
-  // Award points for resolved predictions (only once per prediction)
-  useEffect(() => {
-    if (!prediction || !address || !userBets || !Array.isArray(userBets) || userBets.length === 0) return;
-    if (!resolved) return;
-
-    // Check if points already awarded for this prediction
-    const awardedKey = `points_awarded_${predictionId}_${address.toLowerCase()}`;
-    if (localStorage.getItem(awardedKey)) return;
-
-    // Calculate total bet amount in USD (approximate: 1 ETH = $3000, 1 USDC = $1)
-    let totalBetAmountUSD = 0;
-    let userWon = false;
-    let userDirection: 'up' | 'down' = 'up';
-
-    userBets.forEach((bet: any) => {
-      const betDirection = Array.isArray(bet) ? bet[2] : bet.direction;
-      const betAmountUsdc = Array.isArray(bet) ? bet[3] : bet.amountUsdc;
-      const betAmountEth = Array.isArray(bet) ? bet[4] : bet.amountEth;
-
-      // Convert to USD (approximate)
-      totalBetAmountUSD += Number(betAmountUsdc) / 1e6; // USDC has 6 decimals
-      totalBetAmountUSD += (Number(betAmountEth) / 1e18) * 3000; // ETH to USD
-
-      // Check if user won
-      if (betDirection === winningOutcome) {
-        userWon = true;
-      }
-      userDirection = betDirection ? 'up' : 'down';
-    });
-
-    if (totalBetAmountUSD > 0 && timeframe) {
-      // Award points
-      addBetPoints(
-        predictionId,
-        totalBetAmountUSD,
-        Number(timeframe),
-        userDirection,
-        userWon
-      );
-
-      // Mark as awarded
-      localStorage.setItem(awardedKey, 'true');
-    }
-  }, [prediction, address, userBets, predictionId, resolved, winningOutcome, timeframe, addBetPoints]);
-
-  const totalPool = (totalUpBets || BigInt(0)) + (totalDownBets || BigInt(0)) + (totalUpBetsEth || BigInt(0)) + (totalDownBetsEth || BigInt(0));
-  const winningPool = winningOutcome ? (totalUpBets || BigInt(0)) + (totalUpBetsEth || BigInt(0)) : (totalDownBets || BigInt(0)) + (totalDownBetsEth || BigInt(0));
-  const losingPool = winningOutcome ? (totalDownBets || BigInt(0)) + (totalDownBetsEth || BigInt(0)) : (totalUpBets || BigInt(0)) + (totalUpBetsEth || BigInt(0));
+  const totalPool = (totalYesPool || 0n) + (totalNoPool || 0n);
+  const winningPool = winningOutcome ? totalYesPool : totalNoPool;
+  const losingPool = winningOutcome ? totalNoPool : totalYesPool;
 
   const formatPrice = (price: bigint | undefined) => {
     if (!price) return '---';
@@ -939,21 +888,6 @@ function HistoryPredictionCard({ predictionId }: { predictionId: number }) {
       claimPredictionWinnings(predictionId);
     }
   };
-
-  // Calculate points earned for display
-  let pointsEarned = 0;
-  if (userBets && Array.isArray(userBets) && userBets.length > 0 && timeframe) {
-    let totalBetAmountUSD = 0;
-    userBets.forEach((bet: any) => {
-      const betAmountUsdc = Array.isArray(bet) ? bet[3] : bet.amountUsdc;
-      const betAmountEth = Array.isArray(bet) ? bet[4] : bet.amountEth;
-      totalBetAmountUSD += Number(betAmountUsdc) / 1e6;
-      totalBetAmountUSD += (Number(betAmountEth) / 1e18) * 3000;
-    });
-    if (totalBetAmountUSD > 0) {
-      pointsEarned = calculatePoints(totalBetAmountUSD, Number(timeframe), userWon ?? false);
-    }
-  }
 
   return (
     <div className="bg-brand-bg-card rounded-xl shadow-lg p-6 border-2 border-brand-purple-900/30">
@@ -982,11 +916,6 @@ function HistoryPredictionCard({ predictionId }: { predictionId: number }) {
                 {userWon ? '✅ You Won' : '❌ You Lost'}
               </span>
             )}
-            {pointsEarned > 0 && (
-              <span className="px-3 py-1 rounded-full text-sm font-bold bg-gradient-to-r from-yellow-400/20 to-orange-400/20 text-yellow-400 border border-yellow-400/50">
-                🎯 +{pointsEarned.toLocaleString()} pts
-              </span>
-            )}
           </div>
           <div className="text-sm text-gray-400">
             Ended {formatDate(endTime)}
@@ -1001,20 +930,8 @@ function HistoryPredictionCard({ predictionId }: { predictionId: number }) {
             : 'bg-gray-50 dark:bg-gray-800/20 border-gray-200 dark:border-gray-700'
         }`}>
           <div className="text-sm font-semibold text-gray-600 dark:text-gray-400 mb-1">UP Pool {winningOutcome && '👑'}</div>
-          <div className={`space-y-0.5 ${winningOutcome ? 'text-green-600 dark:text-green-400' : 'text-gray-600 dark:text-gray-400'}`}>
-            {totalUpBetsEth && totalUpBetsEth > BigInt(0) && (
-              <div className="text-lg font-bold">
-                {formatEth(totalUpBetsEth)} ETH
-              </div>
-            )}
-            {totalUpBets && totalUpBets > BigInt(0) && (
-              <div className="text-lg font-bold">
-                {(Number(totalUpBets) / 1e6).toFixed(2)} USDC
-              </div>
-            )}
-            {(!totalUpBetsEth || totalUpBetsEth === BigInt(0)) && (!totalUpBets || totalUpBets === BigInt(0)) && (
-              <div className="text-lg font-bold">0</div>
-            )}
+          <div className={`text-xl font-bold ${winningOutcome ? 'text-green-600 dark:text-green-400' : 'text-gray-600 dark:text-gray-400'}`}>
+            {formatEth(totalYesPool)} ETH
           </div>
         </div>
 
@@ -1024,20 +941,8 @@ function HistoryPredictionCard({ predictionId }: { predictionId: number }) {
             : 'bg-gray-50 dark:bg-gray-800/20 border-gray-200 dark:border-gray-700'
         }`}>
           <div className="text-sm font-semibold text-gray-600 dark:text-gray-400 mb-1">DOWN Pool {!winningOutcome && '👑'}</div>
-          <div className={`space-y-0.5 ${!winningOutcome ? 'text-red-600 dark:text-red-400' : 'text-gray-600 dark:text-gray-400'}`}>
-            {totalDownBetsEth && totalDownBetsEth > BigInt(0) && (
-              <div className="text-lg font-bold">
-                {formatEth(totalDownBetsEth)} ETH
-              </div>
-            )}
-            {totalDownBets && totalDownBets > BigInt(0) && (
-              <div className="text-lg font-bold">
-                {(Number(totalDownBets) / 1e6).toFixed(2)} USDC
-              </div>
-            )}
-            {(!totalDownBetsEth || totalDownBetsEth === BigInt(0)) && (!totalDownBets || totalDownBets === BigInt(0)) && (
-              <div className="text-lg font-bold">0</div>
-            )}
+          <div className={`text-xl font-bold ${!winningOutcome ? 'text-red-600 dark:text-red-400' : 'text-gray-600 dark:text-gray-400'}`}>
+            {formatEth(totalNoPool)} ETH
           </div>
         </div>
       </div>
@@ -1123,17 +1028,7 @@ function ActivePredictionCard({ predictionId }: { predictionId: number }) {
   const [timeRemaining, setTimeRemaining] = useState<number>(0);
 
   // Extract data before any conditional returns
-  let id: bigint | undefined;
-  let tokenSymbol: string | undefined;
-  let description: string | undefined;
-  let startPrice: bigint | undefined;
-  let endTime: bigint | undefined;
-  let totalYesPool: bigint | undefined;
-  let totalNoPool: bigint | undefined;
-  let resolved: boolean | undefined;
-  let winningOutcome: boolean | undefined;
-  let actualEndPrice: bigint | undefined;
-  let creator: string | undefined;
+  let id, tokenSymbol, description, startPrice, endTime, totalYesPool, totalNoPool, resolved, winningOutcome, actualEndPrice, creator;
 
   if (prediction) {
     if (Array.isArray(prediction)) {
@@ -1145,7 +1040,7 @@ function ActivePredictionCard({ predictionId }: { predictionId: number }) {
   }
 
   const isExpired = endTime ? Number(endTime) < Date.now() / 1000 : false;
-  const totalPool = (totalYesPool || BigInt(0)) + (totalNoPool || BigInt(0));
+  const totalPool = (totalYesPool || 0n) + (totalNoPool || 0n);
 
   // Countdown timer for active predictions - must be called before any conditional returns
   useEffect(() => {
@@ -1207,7 +1102,7 @@ function ActivePredictionCard({ predictionId }: { predictionId: number }) {
                 <span className="text-gray-500">remaining</span>
               </div>
             ) : (
-              <span>Ended {endTime ? formatDate(endTime) : 'N/A'}</span>
+              <span>Ended {formatDate(endTime)}</span>
             )}
           </div>
         </div>
